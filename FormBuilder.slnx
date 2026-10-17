@@ -3,5 +3,6 @@
     <Project Path="server/FormBuilder.Api/FormBuilder.Api.csproj" />
     <Project Path="server/FormBuilder.Core/FormBuilder.Core.csproj" />
     <Project Path="server/FormBuilder.Infrastructure/FormBuilder.Infrastructure.csproj" />
+    <Project Path="server/FormBuilder.Tests/FormBuilder.Tests.csproj" />
   </Folder>
 </Solution>
