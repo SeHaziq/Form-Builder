@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/server/">
+    <Project Path="server/FormBuilder.Api/FormBuilder.Api.csproj" />
+  </Folder>
+</Solution>
