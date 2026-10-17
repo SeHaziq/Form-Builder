@@ -22,3 +22,6 @@ obj/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# VS Code workspace file
+*.code-workspace
