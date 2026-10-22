@@ -20,4 +20,6 @@ public class FormVersion
     public DateTimeOffset? PublishedAt { get; set; }
 
     public Form Form { get; set; } = null!;
+
+    public ICollection<Question> Questions { get; set; } = new List<Question>();
 }
