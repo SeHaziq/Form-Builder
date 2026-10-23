@@ -14,4 +14,6 @@ public class Form
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public ICollection<FormVersion> Versions { get; set; } = new List<FormVersion>();
+
+    public string PublicId { get; set; } = Guid.NewGuid().ToString("N");
 }

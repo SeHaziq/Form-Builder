@@ -63,158 +63,254 @@ public class FormsController : ControllerBase
     }
 
     [HttpGet]
-public async Task<IActionResult> GetForms()
-{
-    var ownerId = User.FindFirst(
-        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
-    if (string.IsNullOrEmpty(ownerId))
+    public async Task<IActionResult> GetForms()
     {
-        return Unauthorized();
-    }
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-    var forms = await _dbContext.Forms
-        .Where(form => form.OwnerId == ownerId)
-        .OrderByDescending(form => form.UpdatedAt)
-        .Select(form => new
+        if (string.IsNullOrEmpty(ownerId))
         {
-            form.Id,
-            form.Title,
-            form.CreatedAt,
-            form.UpdatedAt
-        })
-        .ToListAsync();
+            return Unauthorized();
+        }
 
-    return Ok(forms);
-}
+        var forms = await _dbContext.Forms
+            .Where(form => form.OwnerId == ownerId)
+            .OrderByDescending(form => form.UpdatedAt)
+            .Select(form => new
+            {
+                form.Id,
+                form.Title,
+                form.CreatedAt,
+                form.UpdatedAt
+            })
+            .ToListAsync();
 
-
-[HttpPost("{id:guid}/questions")]
-[ValidateAntiForgeryToken]
-public async Task<IActionResult> CreateQuestion(
-    Guid id,
-    [FromBody] CreateQuestionRequest request)
-{
-    var ownerId = User.FindFirst(
-        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
-    if (string.IsNullOrEmpty(ownerId))
-    {
-        return Unauthorized();
+        return Ok(forms);
     }
 
-    var form = await _dbContext.Forms
+
+    [HttpPost("{id:guid}/questions")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CreateQuestion(
+        Guid id,
+        [FromBody] CreateQuestionRequest request)
+    {
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var form = await _dbContext.Forms
         .Include(form => form.Versions)
+            .ThenInclude(version => version.Questions)
+                .ThenInclude(question => question.Options)
         .FirstOrDefaultAsync(
             form => form.Id == id && form.OwnerId == ownerId);
 
-    if (form is null)
-    {
-        return NotFound();
-    }
-
-    var title = request.Label.Trim();
-
-    if (title.Length == 0)
-    {
-        return BadRequest(new { message = "Question text cannot be empty." });
-    }
-
-    var needsOptions = request.Type is QuestionType.SingleChoice
-        or QuestionType.MultipleChoice
-        or QuestionType.Dropdown;
-
-    var options = request.Options
-        .Select(option => option.Trim())
-        .ToList();
-
-    if (needsOptions &&
-        (options.Count < 2 || options.Any(string.IsNullOrWhiteSpace)))
-    {
-        return BadRequest(new
+        if (form is null)
         {
-            message = "Choice questions require at least two non-empty options."
-        });
-    }
+            return NotFound();
+        }
 
-    if (!needsOptions && options.Count > 0)
-    {
-        return BadRequest(new
+        var title = request.Label.Trim();
+
+        if (title.Length == 0)
         {
-            message = "Options are only allowed for choice questions."
-        });
-    }
+            return BadRequest(new { message = "Question text cannot be empty." });
+        }
 
-    var draft = form.Versions
+        var needsOptions = request.Type is QuestionType.SingleChoice
+            or QuestionType.MultipleChoice
+            or QuestionType.Dropdown;
+
+        var options = request.Options
+            .Select(option => option.Trim())
+            .ToList();
+
+        if (needsOptions &&
+            (options.Count < 2 || options.Any(string.IsNullOrWhiteSpace)))
+        {
+            return BadRequest(new
+            {
+                message = "Choice questions require at least two non-empty options."
+            });
+        }
+
+        if (!needsOptions && options.Count > 0)
+        {
+            return BadRequest(new
+            {
+                message = "Options are only allowed for choice questions."
+            });
+        }
+
+        var draft = form.Versions
         .Where(version => version.Status == FormVersionStatus.Draft)
         .OrderByDescending(version => version.VersionNumber)
         .FirstOrDefault();
 
-    if (draft is null)
-    {
-        draft = new FormVersion
+        if (draft is null)
         {
-            FormId = form.Id,
-            VersionNumber = form.Versions.Count == 0
-                ? 1
-                : form.Versions.Max(version => version.VersionNumber) + 1,
-            Status = FormVersionStatus.Draft
+            var latestPublished = form.Versions
+                .Where(version => version.Status == FormVersionStatus.Published)
+                .OrderByDescending(version => version.VersionNumber)
+                .FirstOrDefault();
+
+            draft = new FormVersion
+            {
+                FormId = form.Id,
+                VersionNumber = form.Versions.Count == 0
+                    ? 1
+                    : form.Versions.Max(version => version.VersionNumber) + 1,
+                Status = FormVersionStatus.Draft
+            };
+
+            if (latestPublished is not null)
+            {
+                foreach (var publishedQuestion in latestPublished.Questions
+                             .OrderBy(question => question.Position))
+                {
+                    var draftQuestion = new Question
+                    {
+                        FormVersion = draft,
+                        Label = publishedQuestion.Label,
+                        Type = publishedQuestion.Type,
+                        IsRequired = publishedQuestion.IsRequired,
+                        Position = publishedQuestion.Position
+                    };
+
+                    foreach (var publishedOption in publishedQuestion.Options
+                                 .OrderBy(option => option.Position))
+                    {
+                        draftQuestion.Options.Add(new QuestionOption
+                        {
+                            Label = publishedOption.Label,
+                            Position = publishedOption.Position
+                        });
+                    }
+
+                    draft.Questions.Add(draftQuestion);
+                }
+            }
+
+            _dbContext.FormVersions.Add(draft);
+            await _dbContext.SaveChangesAsync();
+        }
+
+        var position = await _dbContext.Questions
+            .Where(question => question.FormVersionId == draft.Id)
+            .CountAsync();
+
+        var question = new Question
+        {
+            FormVersionId = draft.Id,
+            Label = title,
+            Type = request.Type,
+            IsRequired = request.IsRequired,
+            Position = position
         };
 
-        _dbContext.FormVersions.Add(draft);
+        for (var index = 0; index < options.Count; index++)
+        {
+            question.Options.Add(new QuestionOption
+            {
+                Label = options[index],
+                Position = index
+            });
+        }
+
+        form.UpdatedAt = DateTimeOffset.UtcNow;
+        _dbContext.Questions.Add(question);
+
+        await _dbContext.SaveChangesAsync();
+
+        return Created(
+            $"/api/v1/forms/{id}/questions/{question.Id}",
+            new
+            {
+                question.Id,
+                question.FormVersionId,
+                question.Label,
+                question.Type,
+                question.IsRequired,
+                question.Position,
+                Options = question.Options
+                    .OrderBy(option => option.Position)
+                    .Select(option => new
+                    {
+                        option.Id,
+                        option.Label,
+                        option.Position
+                    })
+            });
     }
 
-    var position = await _dbContext.Questions
-        .Where(question => question.FormVersionId == draft.Id)
-        .CountAsync();
 
-    var question = new Question
+    [HttpGet("{id:guid}/questions")]
+    public async Task<IActionResult> GetQuestions(Guid id)
     {
-        FormVersionId = draft.Id,
-        Label = title,
-        Type = request.Type,
-        IsRequired = request.IsRequired,
-        Position = position
-    };
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-    for (var index = 0; index < options.Count; index++)
-    {
-        question.Options.Add(new QuestionOption
+        if (string.IsNullOrEmpty(ownerId))
         {
-            Label = options[index],
-            Position = index
-        });
+            return Unauthorized();
+        }
+
+        var form = await _dbContext.Forms
+            .Where(form => form.Id == id && form.OwnerId == ownerId)
+            .Select(form => new { form.Id })
+            .FirstOrDefaultAsync();
+
+        if (form is null)
+        {
+            return NotFound();
+        }
+
+        var draft = await _dbContext.FormVersions
+            .Where(version =>
+                version.FormId == id &&
+                version.Status == FormVersionStatus.Draft)
+            .OrderByDescending(version => version.VersionNumber)
+            .Select(version => new { version.Id })
+            .FirstOrDefaultAsync();
+
+        if (draft is null)
+        {
+            return Ok(Array.Empty<object>());
+        }
+
+        var questions = await _dbContext.Questions
+            .Where(question => question.FormVersionId == draft.Id)
+            .OrderBy(question => question.Position)
+            .Select(question => new
+            {
+                question.Id,
+                question.FormVersionId,
+                question.Label,
+                question.Type,
+                question.IsRequired,
+                question.Position,
+                Options = question.Options
+                    .OrderBy(option => option.Position)
+                    .Select(option => new
+                    {
+                        option.Id,
+                        option.Label,
+                        option.Position
+                    })
+            })
+            .ToListAsync();
+
+        return Ok(questions);
     }
 
-    form.UpdatedAt = DateTimeOffset.UtcNow;
-    _dbContext.Questions.Add(question);
-
-    await _dbContext.SaveChangesAsync();
-
-    return Created(
-        $"/api/v1/forms/{id}/questions/{question.Id}",
-        new
-        {
-            question.Id,
-            question.FormVersionId,
-            question.Label,
-            question.Type,
-            question.IsRequired,
-            question.Position,
-            Options = question.Options
-                .OrderBy(option => option.Position)
-                .Select(option => new
-                {
-                    option.Id,
-                    option.Label,
-                    option.Position
-                })
-        });
-}
-
-
-[HttpGet("{id:guid}/questions")]
-public async Task<IActionResult> GetQuestions(Guid id)
+    
+[HttpGet("{id:guid}/published-questions")]
+public async Task<IActionResult> GetPublishedQuestions(Guid id)
 {
     var ownerId = User.FindFirst(
         System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -224,31 +320,29 @@ public async Task<IActionResult> GetQuestions(Guid id)
         return Unauthorized();
     }
 
-    var form = await _dbContext.Forms
-        .Where(form => form.Id == id && form.OwnerId == ownerId)
-        .Select(form => new { form.Id })
-        .FirstOrDefaultAsync();
+    var formExists = await _dbContext.Forms
+        .AnyAsync(form => form.Id == id && form.OwnerId == ownerId);
 
-    if (form is null)
+    if (!formExists)
     {
         return NotFound();
     }
 
-    var draft = await _dbContext.FormVersions
+    var publishedVersion = await _dbContext.FormVersions
         .Where(version =>
             version.FormId == id &&
-            version.Status == FormVersionStatus.Draft)
+            version.Status == FormVersionStatus.Published)
         .OrderByDescending(version => version.VersionNumber)
         .Select(version => new { version.Id })
         .FirstOrDefaultAsync();
 
-    if (draft is null)
+    if (publishedVersion is null)
     {
         return Ok(Array.Empty<object>());
     }
 
     var questions = await _dbContext.Questions
-        .Where(question => question.FormVersionId == draft.Id)
+        .Where(question => question.FormVersionId == publishedVersion.Id)
         .OrderBy(question => question.Position)
         .Select(question => new
         {
@@ -272,77 +366,343 @@ public async Task<IActionResult> GetQuestions(Guid id)
     return Ok(questions);
 }
 
-[HttpPut("{id:guid}/questions/reorder")]
+
+    [HttpPut("{id:guid}/questions/reorder")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ReorderQuestions(
+        Guid id,
+        [FromBody] ReorderQuestionsRequest request)
+    {
+        var ownerId = User.FindFirst(
+        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        var form = await _dbContext.Forms
+            .Include(f => f.Versions)
+                .ThenInclude(v => v.Questions)
+            .FirstOrDefaultAsync(f => f.Id == id && f.OwnerId == ownerId);
+
+        if (form is null)
+        {
+            return NotFound();
+        }
+
+        var draft = form.Versions
+            .Where(v => v.Status == FormVersionStatus.Draft)
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
+
+        if (draft is null)
+        {
+            return BadRequest("This form has no draft version.");
+        }
+
+        var currentIds = draft.Questions.Select(q => q.Id).ToHashSet();
+        var requestedIds = request.QuestionIds;
+
+        if (requestedIds.Count != currentIds.Count ||
+            requestedIds.Distinct().Count() != requestedIds.Count ||
+            !requestedIds.ToHashSet().SetEquals(currentIds))
+        {
+            return BadRequest("The question order must contain every draft question exactly once.");
+        }
+
+        await using var transaction =
+            await _dbContext.Database.BeginTransactionAsync();
+
+        // Temporarily use negative positions to avoid conflicts with the unique index.
+        for (var i = 0; i < requestedIds.Count; i++)
+        {
+            var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
+            question.Position = -1 - i;
+        }
+
+        await _dbContext.SaveChangesAsync();
+
+        for (var i = 0; i < requestedIds.Count; i++)
+        {
+            var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
+            question.Position = i;
+        }
+
+        form.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/questions/{questionId:guid}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> UpdateQuestion(
+        Guid id,
+        Guid questionId,
+        [FromBody] UpdateQuestionRequest request)
+    {
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var question = await _dbContext.Questions
+            .Include(question => question.Options)
+            .Include(question => question.FormVersion)
+            .ThenInclude(version => version.Form)
+            .FirstOrDefaultAsync(question =>
+                question.Id == questionId &&
+                question.FormVersion.FormId == id &&
+                question.FormVersion.Form.OwnerId == ownerId);
+
+        if (question is null)
+        {
+            return NotFound();
+        }
+
+        if (question.FormVersion.Status != FormVersionStatus.Draft)
+        {
+            return BadRequest(new
+            {
+                message = "Only draft questions can be edited."
+            });
+        }
+
+        var label = request.Label.Trim();
+
+        if (label.Length == 0)
+        {
+            return BadRequest(new
+            {
+                message = "Question text cannot be empty."
+            });
+        }
+
+        if (!Enum.IsDefined(typeof(QuestionType), request.Type))
+        {
+            return BadRequest(new
+            {
+                message = "Invalid question type."
+            });
+        }
+
+        var needsOptions = request.Type is QuestionType.SingleChoice
+            or QuestionType.MultipleChoice
+            or QuestionType.Dropdown;
+
+        var options = request.Options
+            .Select(option => option.Trim())
+            .ToList();
+
+        if (needsOptions &&
+            (options.Count < 2 || options.Any(string.IsNullOrWhiteSpace)))
+        {
+            return BadRequest(new
+            {
+                message = "Choice questions require at least two non-empty options."
+            });
+        }
+
+        if (!needsOptions && options.Count > 0)
+        {
+            return BadRequest(new
+            {
+                message = "Options are only allowed for choice questions."
+            });
+        }
+
+
+        question.Label = label;
+        question.Type = request.Type;
+        question.IsRequired = request.IsRequired;
+
+        // Explicitly mark the existing options for deletion.
+        var existingOptions = question.Options.ToList();
+
+        _dbContext.QuestionOptions.RemoveRange(existingOptions);
+        question.Options.Clear();
+
+        // Add the replacement options.
+        for (var index = 0; index < options.Count; index++)
+        {
+            _dbContext.QuestionOptions.Add(new QuestionOption
+            {
+                QuestionId = question.Id,
+                Label = options[index],
+                Position = index
+            });
+        }
+
+
+        question.FormVersion.Form.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new
+        {
+            question.Id,
+            question.FormVersionId,
+            question.Label,
+            question.Type,
+            question.IsRequired,
+            question.Position,
+            Options = question.Options
+                .OrderBy(option => option.Position)
+                .Select(option => new
+                {
+                    option.Id,
+                    option.Label,
+                    option.Position
+                })
+        });
+    }
+
+
+
+    [HttpDelete("{id:guid}/questions/{questionId:guid}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteQuestion(
+        Guid id,
+        Guid questionId)
+    {
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var question = await _dbContext.Questions
+            .Include(question => question.Options)
+            .Include(question => question.FormVersion)
+            .ThenInclude(version => version.Form)
+            .FirstOrDefaultAsync(question =>
+                question.Id == questionId &&
+                question.FormVersion.FormId == id &&
+                question.FormVersion.Form.OwnerId == ownerId);
+
+        if (question is null)
+        {
+            return NotFound();
+        }
+
+        if (question.FormVersion.Status != FormVersionStatus.Draft)
+        {
+            return BadRequest(new
+            {
+                message = "Only draft questions can be deleted."
+            });
+        }
+
+        var form = question.FormVersion.Form;
+
+        _dbContext.Questions.Remove(question);
+        form.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync();
+
+        return NoContent();
+    }
+
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetForm(Guid id)
+    {
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var form = await _dbContext.Forms
+            .Where(form => form.Id == id && form.OwnerId == ownerId)
+            .Select(form => new
+            {
+                form.Id,
+                form.Title,
+                form.CreatedAt,
+                form.UpdatedAt
+            })
+            .FirstOrDefaultAsync();
+
+        if (form is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(form);
+    }
+
+
+    [HttpPost("{id:guid}/publish")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> PublishForm(Guid id)
+    {
+        var ownerId = User.FindFirst(
+            System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        if (string.IsNullOrEmpty(ownerId))
+        {
+            return Unauthorized();
+        }
+
+        var form = await _dbContext.Forms
+            .Include(form => form.Versions)
+                .ThenInclude(version => version.Questions)
+            .FirstOrDefaultAsync(
+                form => form.Id == id && form.OwnerId == ownerId);
+
+        if (form is null)
+        {
+            return NotFound();
+        }
+
+        var draft = form.Versions
+            .Where(version => version.Status == FormVersionStatus.Draft)
+            .OrderByDescending(version => version.VersionNumber)
+            .FirstOrDefault();
+
+        if (draft is null)
+        {
+            return BadRequest(new
+            {
+                message = "There is no draft version to publish."
+            });
+        }
+
+        if (draft.Questions.Count == 0)
+        {
+            return BadRequest(new
+            {
+                message = "Add at least one question before publishing."
+            });
+        }
+
+        draft.Status = FormVersionStatus.Published;
+        draft.PublishedAt = DateTimeOffset.UtcNow;
+        form.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await _dbContext.SaveChangesAsync();
+
+        return Ok(new
+        {
+            formId = form.Id,
+            versionId = draft.Id,
+            versionNumber = draft.VersionNumber,
+            status = draft.Status.ToString(),
+            publishedAt = draft.PublishedAt
+        });
+    }
+
+
+   
+[HttpPost("{id:guid}/draft")]
 [ValidateAntiForgeryToken]
-public async Task<IActionResult> ReorderQuestions(
-    Guid id,
-    [FromBody] ReorderQuestionsRequest request)
-{
-    var ownerId = User.FindFirst(
-    System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
-    var form = await _dbContext.Forms
-        .Include(f => f.Versions)
-            .ThenInclude(v => v.Questions)
-        .FirstOrDefaultAsync(f => f.Id == id && f.OwnerId == ownerId);
-
-    if (form is null)
-    {
-        return NotFound();
-    }
-
-    var draft = form.Versions
-        .Where(v => v.Status == FormVersionStatus.Draft)
-        .OrderByDescending(v => v.VersionNumber)
-        .FirstOrDefault();
-
-    if (draft is null)
-    {
-        return BadRequest("This form has no draft version.");
-    }
-
-    var currentIds = draft.Questions.Select(q => q.Id).ToHashSet();
-    var requestedIds = request.QuestionIds;
-
-    if (requestedIds.Count != currentIds.Count ||
-        requestedIds.Distinct().Count() != requestedIds.Count ||
-        !requestedIds.ToHashSet().SetEquals(currentIds))
-    {
-        return BadRequest("The question order must contain every draft question exactly once.");
-    }
-
-    await using var transaction =
-        await _dbContext.Database.BeginTransactionAsync();
-
-    // Temporarily use negative positions to avoid conflicts with the unique index.
-    for (var i = 0; i < requestedIds.Count; i++)
-    {
-        var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
-        question.Position = -1 - i;
-    }
-
-    await _dbContext.SaveChangesAsync();
-
-    for (var i = 0; i < requestedIds.Count; i++)
-    {
-        var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
-        question.Position = i;
-    }
-
-    form.UpdatedAt = DateTimeOffset.UtcNow;
-
-    await _dbContext.SaveChangesAsync();
-    await transaction.CommitAsync();
-
-    return NoContent();
-}
-
-[HttpPut("{id:guid}/questions/{questionId:guid}")]
-[ValidateAntiForgeryToken]
-public async Task<IActionResult> UpdateQuestion(
-    Guid id,
-    Guid questionId,
-    [FromBody] UpdateQuestionRequest request)
+public async Task<IActionResult> CreateDraft(Guid id)
 {
     var ownerId = User.FindFirst(
         System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -352,194 +712,129 @@ public async Task<IActionResult> UpdateQuestion(
         return Unauthorized();
     }
 
-    var question = await _dbContext.Questions
-        .Include(question => question.Options)
-        .Include(question => question.FormVersion)
-        .ThenInclude(version => version.Form)
-        .FirstOrDefaultAsync(question =>
-            question.Id == questionId &&
-            question.FormVersion.FormId == id &&
-            question.FormVersion.Form.OwnerId == ownerId);
+    var form = await _dbContext.Forms
+        .Include(form => form.Versions)
+            .ThenInclude(version => version.Questions)
+                .ThenInclude(question => question.Options)
+        .FirstOrDefaultAsync(
+            form => form.Id == id && form.OwnerId == ownerId);
 
-    if (question is null)
+    if (form is null)
     {
         return NotFound();
     }
 
-    if (question.FormVersion.Status != FormVersionStatus.Draft)
+    // Reuse an existing draft whenever possible.
+    var existingDraft = form.Versions
+        .Where(version => version.Status == FormVersionStatus.Draft)
+        .OrderByDescending(version => version.VersionNumber)
+        .FirstOrDefault();
+
+    if (existingDraft is not null)
     {
-        return BadRequest(new
+        return Ok(new
         {
-            message = "Only draft questions can be edited."
+            versionId = existingDraft.Id,
+            versionNumber = existingDraft.VersionNumber,
+            status = existingDraft.Status.ToString()
         });
     }
 
-    var label = request.Label.Trim();
+    var latestPublished = form.Versions
+        .Where(version => version.Status == FormVersionStatus.Published)
+        .OrderByDescending(version => version.VersionNumber)
+        .FirstOrDefault();
 
-    if (label.Length == 0)
+    var latestVersionNumber = form.Versions
+        .Select(version => version.VersionNumber)
+        .DefaultIfEmpty(0)
+        .Max();
+
+    var draft = new FormVersion
     {
-        return BadRequest(new
+        FormId = form.Id,
+        VersionNumber = latestVersionNumber + 1,
+        Status = FormVersionStatus.Draft
+    };
+
+    // Copy questions and options if a published version exists.
+    if (latestPublished is not null)
+    {
+        foreach (var publishedQuestion in latestPublished.Questions
+                     .OrderBy(question => question.Position))
         {
-            message = "Question text cannot be empty."
-        });
+            var draftQuestion = new Question
+            {
+                FormVersion = draft,
+                Label = publishedQuestion.Label,
+                Type = publishedQuestion.Type,
+                IsRequired = publishedQuestion.IsRequired,
+                Position = publishedQuestion.Position
+            };
+
+            foreach (var publishedOption in publishedQuestion.Options
+                         .OrderBy(option => option.Position))
+            {
+                draftQuestion.Options.Add(new QuestionOption
+                {
+                    Label = publishedOption.Label,
+                    Position = publishedOption.Position
+                });
+            }
+
+            draft.Questions.Add(draftQuestion);
+        }
     }
 
-    if (!Enum.IsDefined(typeof(QuestionType), request.Type))
+    _dbContext.FormVersions.Add(draft);
+    form.UpdatedAt = DateTimeOffset.UtcNow;
+
+    try
     {
-        return BadRequest(new
+        await _dbContext.SaveChangesAsync();
+    }
+    catch (DbUpdateException ex)
+        when (ex.InnerException is Npgsql.PostgresException pgException
+              && pgException.SqlState == "23505"
+              && pgException.ConstraintName ==
+                 "IX_FormVersions_FormId_VersionNumber")
+    {
+        // A concurrent request may have created the draft first.
+        _dbContext.ChangeTracker.Clear();
+
+        var recoveredDraft = await _dbContext.FormVersions
+            .Where(version =>
+                version.FormId == id &&
+                version.Status == FormVersionStatus.Draft)
+            .OrderByDescending(version => version.VersionNumber)
+            .Select(version => new
+            {
+                version.Id,
+                version.VersionNumber,
+                version.Status
+            })
+            .FirstOrDefaultAsync();
+
+        if (recoveredDraft is null)
         {
-            message = "Invalid question type."
+            throw;
+        }
+
+        return Ok(new
+        {
+            versionId = recoveredDraft.Id,
+            versionNumber = recoveredDraft.VersionNumber,
+            status = recoveredDraft.Status.ToString()
         });
     }
-
-    var needsOptions = request.Type is QuestionType.SingleChoice
-        or QuestionType.MultipleChoice
-        or QuestionType.Dropdown;
-
-    var options = request.Options
-        .Select(option => option.Trim())
-        .ToList();
-
-    if (needsOptions &&
-        (options.Count < 2 || options.Any(string.IsNullOrWhiteSpace)))
-    {
-        return BadRequest(new
-        {
-            message = "Choice questions require at least two non-empty options."
-        });
-    }
-
-    if (!needsOptions && options.Count > 0)
-    {
-        return BadRequest(new
-        {
-            message = "Options are only allowed for choice questions."
-        });
-    }
-
-    
-question.Label = label;
-question.Type = request.Type;
-question.IsRequired = request.IsRequired;
-
-// Explicitly mark the existing options for deletion.
-var existingOptions = question.Options.ToList();
-
-_dbContext.QuestionOptions.RemoveRange(existingOptions);
-question.Options.Clear();
-
-// Add the replacement options.
-for (var index = 0; index < options.Count; index++)
-{
-    _dbContext.QuestionOptions.Add(new QuestionOption
-    {
-        QuestionId = question.Id,
-        Label = options[index],
-        Position = index
-    });
-}
-
-
-    question.FormVersion.Form.UpdatedAt = DateTimeOffset.UtcNow;
-
-    await _dbContext.SaveChangesAsync();
 
     return Ok(new
     {
-        question.Id,
-        question.FormVersionId,
-        question.Label,
-        question.Type,
-        question.IsRequired,
-        question.Position,
-        Options = question.Options
-            .OrderBy(option => option.Position)
-            .Select(option => new
-            {
-                option.Id,
-                option.Label,
-                option.Position
-            })
+        versionId = draft.Id,
+        versionNumber = draft.VersionNumber,
+        status = draft.Status.ToString()
     });
 }
 
-
-
-[HttpDelete("{id:guid}/questions/{questionId:guid}")]
-[ValidateAntiForgeryToken]
-public async Task<IActionResult> DeleteQuestion(
-    Guid id,
-    Guid questionId)
-{
-    var ownerId = User.FindFirst(
-        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
-    if (string.IsNullOrEmpty(ownerId))
-    {
-        return Unauthorized();
-    }
-
-    var question = await _dbContext.Questions
-        .Include(question => question.Options)
-        .Include(question => question.FormVersion)
-        .ThenInclude(version => version.Form)
-        .FirstOrDefaultAsync(question =>
-            question.Id == questionId &&
-            question.FormVersion.FormId == id &&
-            question.FormVersion.Form.OwnerId == ownerId);
-
-    if (question is null)
-    {
-        return NotFound();
-    }
-
-    if (question.FormVersion.Status != FormVersionStatus.Draft)
-    {
-        return BadRequest(new
-        {
-            message = "Only draft questions can be deleted."
-        });
-    }
-
-    var form = question.FormVersion.Form;
-
-    _dbContext.Questions.Remove(question);
-    form.UpdatedAt = DateTimeOffset.UtcNow;
-
-    await _dbContext.SaveChangesAsync();
-
-    return NoContent();
-}
-
-
-[HttpGet("{id:guid}")]
-public async Task<IActionResult> GetForm(Guid id)
-{
-    var ownerId = User.FindFirst(
-        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-
-    if (string.IsNullOrEmpty(ownerId))
-    {
-        return Unauthorized();
-    }
-
-    var form = await _dbContext.Forms
-        .Where(form => form.Id == id && form.OwnerId == ownerId)
-        .Select(form => new
-        {
-            form.Id,
-            form.Title,
-            form.CreatedAt,
-            form.UpdatedAt
-        })
-        .FirstOrDefaultAsync();
-
-    if (form is null)
-    {
-        return NotFound();
-    }
-
-    return Ok(form);
-}
 
 }

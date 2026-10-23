@@ -55,6 +55,16 @@ export function getQuestions(formId: string): Promise<FormQuestion[]> {
     return apiRequest<FormQuestion[]>(`/forms/${formId}/questions`);
 }
 
+
+export function getPublishedQuestions(
+  formId: string,
+): Promise<FormQuestion[]> {
+  return apiRequest<FormQuestion[]>(
+    `/forms/${formId}/published-questions`,
+  );
+}
+
+
 export function createQuestion(
     formId: string,
     data: CreateQuestionRequest,
@@ -123,4 +133,42 @@ export function reorderQuestions(
     method: "PUT",
     body: JSON.stringify({ questionIds }),
   });
+}
+
+
+export interface PublishFormResult {
+  formId: string;
+  versionId: string;
+  versionNumber: number;
+  status: string;
+  publishedAt: string;
+}
+
+export function publishForm(
+  formId: string,
+): Promise<PublishFormResult> {
+  return apiRequest<PublishFormResult>(
+    `/forms/${formId}/publish`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+
+export interface DraftFormResult {
+  versionId: string;
+  versionNumber: number;
+  status: string;
+}
+
+export function createDraft(
+  formId: string,
+): Promise<DraftFormResult> {
+  return apiRequest<DraftFormResult>(
+    `/forms/${formId}/draft`,
+    {
+      method: "POST",
+    },
+  );
 }
