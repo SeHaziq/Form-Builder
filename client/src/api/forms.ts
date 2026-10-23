@@ -101,3 +101,26 @@ export function updateQuestion(
         },
     );
 }
+
+
+export function deleteQuestion(
+    formId: string,
+    questionId: string,
+): Promise<void> {
+    return apiRequest<void>(
+        `/forms/${formId}/questions/${questionId}`,
+        {
+            method: "DELETE",
+        },
+    );
+}
+
+export function reorderQuestions(
+  formId: string,
+  questionIds: string[],
+): Promise<void> {
+  return apiRequest<void>(`/forms/${formId}/questions/reorder`, {
+    method: "PUT",
+    body: JSON.stringify({ questionIds }),
+  });
+}

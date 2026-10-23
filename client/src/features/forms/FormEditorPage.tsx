@@ -1,12 +1,7 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { Link, useParams } from "react-router";
 import type { FormSummary, FormQuestion } from "../../api/forms";
-import {
-  createQuestion,
-  getForm,
-  getQuestions,
-  updateQuestion,
-} from "../../api/forms";
+import {createQuestion,getForm, getQuestions, updateQuestion,deleteQuestion,reorderQuestions} from "../../api/forms";
 
 export default function FormEditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -91,6 +86,94 @@ export default function FormEditorPage() {
       setSavingQuestion(false);
     }
   }
+
+  async function handleMoveQuestion(
+  questionId: string,
+  direction: "up" | "down",
+) {
+  const currentIndex = questions.findIndex(
+    (question) => question.id === questionId,
+  );
+
+  if (currentIndex === -1) return;
+
+  const newIndex =
+    direction === "up" ? currentIndex - 1 : currentIndex + 1;
+
+  if (newIndex < 0 || newIndex >= questions.length) return;
+
+  const reordered = [...questions];
+  [reordered[currentIndex], reordered[newIndex]] = [
+    reordered[newIndex],
+    reordered[currentIndex],
+  ];
+
+  const questionIds = reordered.map((question) => question.id);
+
+  setError("");
+  setSavingQuestion(true);
+
+  try {
+    await reorderQuestions(id!, questionIds);
+
+    setQuestions(
+      reordered.map((question, position) => ({
+        ...question,
+        position,
+      })),
+    );
+  } catch (err) {
+    setError(
+      err instanceof Error ? err.message : "Failed to reorder questions.",
+    );
+  } finally {
+    setSavingQuestion(false);
+  }
+}
+
+async function handleDeleteQuestion(questionId: string) {
+    if (!id) {
+        setError("Form ID is missing.");
+        return;
+    }
+
+    const confirmed = window.confirm(
+        "Are you sure you want to delete this question?",
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    setError("");
+    setSavingQuestion(true);
+
+    try {
+        await deleteQuestion(id, questionId);
+
+        setQuestions((current) =>
+            current.filter((question) => question.id !== questionId),
+        );
+
+        if (editingQuestionId === questionId) {
+            setEditingQuestionId(null);
+            setQuestionLabel("");
+            setQuestionType(0);
+            setQuestionRequired(false);
+            setQuestionOptions("");
+        }
+    } catch (err) {
+        setError(
+            err instanceof Error
+                ? err.message
+                : "Failed to delete question.",
+        );
+    } finally {
+        setSavingQuestion(false);
+    }
+}
+
+
   useEffect(() => {
     if (!id) {
       return;
@@ -259,7 +342,7 @@ export default function FormEditorPage() {
         <p>No questions yet. We'll add question creation next.</p>
       ) : (
         <ol>
-          {questions.map((question) => (
+          {questions.map((question, index) => (
             <li key={question.id}>
               <strong>{question.label}</strong>
               {" — "}
@@ -282,7 +365,30 @@ export default function FormEditorPage() {
               >
                 Edit
               </button>
+              <button
+    type="button"
+    onClick={() => void handleDeleteQuestion(question.id)}
+    disabled={savingQuestion}
+>
+    Delete
+</button>
+<button
+  type="button"
+  disabled={savingQuestion || index === 0}
+  onClick={() => handleMoveQuestion(question.id, "up")}
+>
+  Move up
+</button>
 
+<button
+  type="button"
+  disabled={
+    savingQuestion || index === questions.length - 1
+  }
+  onClick={() => handleMoveQuestion(question.id, "down")}
+>
+  Move down
+</button>
               {question.options.length > 0 && (
                 <ul>
                   {question.options.map((option) => (

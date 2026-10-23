@@ -272,6 +272,70 @@ public async Task<IActionResult> GetQuestions(Guid id)
     return Ok(questions);
 }
 
+[HttpPut("{id:guid}/questions/reorder")]
+[ValidateAntiForgeryToken]
+public async Task<IActionResult> ReorderQuestions(
+    Guid id,
+    [FromBody] ReorderQuestionsRequest request)
+{
+    var ownerId = User.FindFirst(
+    System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+    var form = await _dbContext.Forms
+        .Include(f => f.Versions)
+            .ThenInclude(v => v.Questions)
+        .FirstOrDefaultAsync(f => f.Id == id && f.OwnerId == ownerId);
+
+    if (form is null)
+    {
+        return NotFound();
+    }
+
+    var draft = form.Versions
+        .Where(v => v.Status == FormVersionStatus.Draft)
+        .OrderByDescending(v => v.VersionNumber)
+        .FirstOrDefault();
+
+    if (draft is null)
+    {
+        return BadRequest("This form has no draft version.");
+    }
+
+    var currentIds = draft.Questions.Select(q => q.Id).ToHashSet();
+    var requestedIds = request.QuestionIds;
+
+    if (requestedIds.Count != currentIds.Count ||
+        requestedIds.Distinct().Count() != requestedIds.Count ||
+        !requestedIds.ToHashSet().SetEquals(currentIds))
+    {
+        return BadRequest("The question order must contain every draft question exactly once.");
+    }
+
+    await using var transaction =
+        await _dbContext.Database.BeginTransactionAsync();
+
+    // Temporarily use negative positions to avoid conflicts with the unique index.
+    for (var i = 0; i < requestedIds.Count; i++)
+    {
+        var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
+        question.Position = -1 - i;
+    }
+
+    await _dbContext.SaveChangesAsync();
+
+    for (var i = 0; i < requestedIds.Count; i++)
+    {
+        var question = draft.Questions.Single(q => q.Id == requestedIds[i]);
+        question.Position = i;
+    }
+
+    form.UpdatedAt = DateTimeOffset.UtcNow;
+
+    await _dbContext.SaveChangesAsync();
+    await transaction.CommitAsync();
+
+    return NoContent();
+}
 
 [HttpPut("{id:guid}/questions/{questionId:guid}")]
 [ValidateAntiForgeryToken]
@@ -397,6 +461,54 @@ for (var index = 0; index < options.Count; index++)
                 option.Position
             })
     });
+}
+
+
+
+[HttpDelete("{id:guid}/questions/{questionId:guid}")]
+[ValidateAntiForgeryToken]
+public async Task<IActionResult> DeleteQuestion(
+    Guid id,
+    Guid questionId)
+{
+    var ownerId = User.FindFirst(
+        System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+    if (string.IsNullOrEmpty(ownerId))
+    {
+        return Unauthorized();
+    }
+
+    var question = await _dbContext.Questions
+        .Include(question => question.Options)
+        .Include(question => question.FormVersion)
+        .ThenInclude(version => version.Form)
+        .FirstOrDefaultAsync(question =>
+            question.Id == questionId &&
+            question.FormVersion.FormId == id &&
+            question.FormVersion.Form.OwnerId == ownerId);
+
+    if (question is null)
+    {
+        return NotFound();
+    }
+
+    if (question.FormVersion.Status != FormVersionStatus.Draft)
+    {
+        return BadRequest(new
+        {
+            message = "Only draft questions can be deleted."
+        });
+    }
+
+    var form = question.FormVersion.Form;
+
+    _dbContext.Questions.Remove(question);
+    form.UpdatedAt = DateTimeOffset.UtcNow;
+
+    await _dbContext.SaveChangesAsync();
+
+    return NoContent();
 }
 
 
