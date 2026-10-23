@@ -23,5 +23,12 @@ public class FormConfiguration : IEntityTypeConfiguration<Form>
             .WithOne(version => version.Form)
             .HasForeignKey(version => version.FormId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Property(form => form.PublicId)
+.IsRequired()
+.HasMaxLength(32);
+
+        builder.HasIndex(form => form.PublicId)
+            .IsUnique();
     }
 }

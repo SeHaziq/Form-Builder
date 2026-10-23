@@ -3,6 +3,8 @@ using FormBuilder.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using FormBuilder.Infrastructure.Identity;
 using Microsoft.AspNetCore.Identity;
+using FormBuilder.Infrastructure.Services;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -91,7 +93,8 @@ builder.Services.AddCors(options =>
     });
 });
 
-
+builder.Services.AddScoped<FormQuestionService>();
+builder.Services.AddScoped<FormService>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
