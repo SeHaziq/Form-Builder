@@ -44,6 +44,7 @@ export function logout(): Promise<AuthResponse> {
     });
 }
 
-export function getCurrentUser(): Promise<CurrentUser> {
+export function getCurrentUser(): Promise<CurrentUser> { 
     return apiRequest<CurrentUser>("/auth/me");
 }
+  
