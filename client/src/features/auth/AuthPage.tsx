@@ -1,166 +1,245 @@
-
+import { createForm, getForms, type FormSummary } from "../../api/forms";
 import { useEffect, useState } from "react";
+
 import {
-    getCurrentUser,
-    login,
-    logout,
-    register,
-    type CurrentUser,
+  getCurrentUser,
+  login,
+  logout,
+  register,
+  type CurrentUser,
 } from "../../api/auth";
 
 type AuthMode = "login" | "register";
 
 export default function AuthPage() {
-    const [mode, setMode] = useState<AuthMode>("login");
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
-    const [user, setUser] = useState<CurrentUser | null>(null);
-    const [checkingSession, setCheckingSession] = useState(true);
-    const [message, setMessage] = useState("");
-    const [error, setError] = useState("");
-    const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [forms, setForms] = useState<FormSummary[]>([]);
+  const [newFormTitle, setNewFormTitle] = useState("");
 
-    useEffect(() => {
-        getCurrentUser()
-            .then(setUser)
-            .catch(() => setUser(null))
-            .finally(() => setCheckingSession(false));
-    }, []);
+async function loadForms() {
+    try {
+      const result = await getForms();
+      setForms(result);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Failed to load forms.",
+      );
+    }
+  }
 
-    async function handleSubmit(
-        event: React.FormEvent<HTMLFormElement>,
-    ) {
-        event.preventDefault();
-        setMessage("");
-        setError("");
-        setLoading(true);
+  useEffect(() => {
+    getCurrentUser()
+      .then(async (currentUser) => {
+        setUser(currentUser);
+        await loadForms();
+      })
+      .catch(() => {
+        setUser(null);
+      })
+      .finally(() => {
+        setCheckingSession(false);
+      });
+  }, []);
 
-        try {
-            if (mode === "login") {
-                await login({ email, password });
-                const currentUser = await getCurrentUser();
-                setUser(currentUser);
-            } else {
-                const result = await register({ email, password });
-                setMessage(result.message);
-                setMode("login");
-            }
+  async function handleCreateForm(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-            setPassword("");
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Something went wrong.",
-            );
-        } finally {
-            setLoading(false);
-        }
+    const title = newFormTitle.trim();
+
+    if (!title) {
+      setError("Please enter a form title.");
+      return;
     }
 
-    async function handleLogout() {
-        setError("");
-        setMessage("");
-        setLoading(true);
+    setLoading(true);
+    setError("");
+    setMessage("");
 
-        try {
-            await logout();
-            setUser(null);
-            setEmail("");
-            setPassword("");
-            setMessage("You have logged out successfully.");
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Logout failed.",
-            );
-        } finally {
-            setLoading(false);
-        }
+    try {
+      const newForm = await createForm({ title });
+
+      setForms((currentForms) => [newForm, ...currentForms]);
+      setNewFormTitle("");
+      setMessage("Form created successfully.");
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Failed to create form.",
+      );
+    } finally {
+      setLoading(false);
     }
+  }
 
-    if (checkingSession) {
-        return <main><p>Checking session...</p></main>;
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    setLoading(true);
+
+    try {
+      if (mode === "login") {
+        await login({ email, password });
+        const currentUser = await getCurrentUser();
+        setUser(currentUser);
+        await loadForms();
+      } else {
+        const result = await register({ email, password });
+        setMessage(result.message);
+        setMode("login");
+      }
+
+      setPassword("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    if (user) {
-        return (
-            <main>
-                <h1>Form Builder</h1>
-                <h2>Dashboard</h2>
-                <p>Welcome, {user.email ?? "user"}!</p>
-                <p>You are signed in.</p>
+  async function handleLogout() {
+    setError("");
+    setMessage("");
+    setLoading(true);
 
-                <button
-                    type="button"
-                    onClick={handleLogout}
-                    disabled={loading}
-                >
-                    {loading ? "Please wait..." : "Log out"}
-                </button>
-
-                {error && <p role="alert">{error}</p>}
-            </main>
-        );
+    try {
+      await logout();
+      setUser(null);
+      setEmail("");
+      setPassword("");
+      setMessage("You have logged out successfully.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Logout failed.");
+    } finally {
+      setLoading(false);
     }
+  }
 
+  if (checkingSession) {
     return (
-        <main>
-            <h1>Form Builder</h1>
-            <h2>
-                {mode === "login" ? "Welcome back" : "Create an account"}
-            </h2>
-
-            <form onSubmit={handleSubmit}>
-                <label htmlFor="email">Email</label>
-                <input
-                    id="email"
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    required
-                />
-
-                <label htmlFor="password">Password</label>
-                <input
-                    id="password"
-                    type="password"
-                    autoComplete={
-                        mode === "login"
-                            ? "current-password"
-                            : "new-password"
-                    }
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    required
-                />
-
-                <button type="submit" disabled={loading}>
-                    {loading
-                        ? "Please wait..."
-                        : mode === "login"
-                          ? "Log in"
-                          : "Register"}
-                </button>
-            </form>
-
-            {message && <p role="status">{message}</p>}
-            {error && <p role="alert">{error}</p>}
-
-            <button
-                type="button"
-                onClick={() => {
-                    setMode(mode === "login" ? "register" : "login");
-                    setMessage("");
-                    setError("");
-                }}
-            >
-                {mode === "login"
-                    ? "Need an account? Register"
-                    : "Already have an account? Log in"}
-            </button>
-        </main>
+      <main>
+        <p>Checking session...</p>
+      </main>
     );
+  }
+
+  if (user) {
+    return (
+        
+      <section>
+        <h1>Form Builder</h1>
+<p>Signed in as {user.email}</p>
+
+<button
+  type="button"
+  onClick={handleLogout}
+  disabled={loading}
+>
+  {loading ? "Please wait..." : "Log out"}
+</button>
+
+{message && <p role="status">{message}</p>}
+{error && <p role="alert">{error}</p>}
+        <h2>Your forms</h2>
+
+        <form onSubmit={handleCreateForm}>
+          <label htmlFor="newFormTitle">Form title</label>
+          <input
+            id="newFormTitle"
+            type="text"
+            value={newFormTitle}
+            onChange={(event) => setNewFormTitle(event.target.value)}
+            maxLength={200}
+            placeholder="e.g. Customer feedback"
+            required
+          />
+          <button type="submit" disabled={loading}>
+            {loading ? "Creating..." : "Create form"}
+          </button>
+        </form>
+
+        {forms.length === 0 ? (
+          <p>You haven't created any forms yet.</p>
+        ) : (
+          <ul>
+            {forms.map((form) => (
+    <li key={form.id}>
+        <button
+            type="button"
+            onClick={() => {
+                window.location.href = `/forms/${form.id}`;
+            }}
+        >
+            {form.title}
+        </button>
+        <small>
+            {" "}
+            Created: {new Date(form.createdAt).toLocaleDateString()}
+        </small>
+    </li>
+))}
+          </ul>
+        )}
+      </section>
+    );
+  }
+  
+  return (
+    <main>
+      <h1>Form Builder</h1>
+      <h2>{mode === "login" ? "Welcome back" : "Create an account"}</h2>
+
+      <form onSubmit={handleSubmit}>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          autoComplete="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          required
+        />
+
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          autoComplete={mode === "login" ? "current-password" : "new-password"}
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+        />
+
+        <button type="submit" disabled={loading}>
+          {loading
+            ? "Please wait..."
+            : mode === "login"
+              ? "Log in"
+              : "Register"}
+        </button>
+      </form>
+
+      {message && <p role="status">{message}</p>}
+      {error && <p role="alert">{error}</p>}
+
+      <button
+        type="button"
+        onClick={() => {
+          setMode(mode === "login" ? "register" : "login");
+          setMessage("");
+          setError("");
+        }}
+      >
+        {mode === "login"
+          ? "Need an account? Register"
+          : "Already have an account? Log in"}
+      </button>
+    </main>
+  );
 }

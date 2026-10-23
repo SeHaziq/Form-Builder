@@ -1,0 +1,299 @@
+import { useEffect, useState, type SyntheticEvent } from "react";
+import { Link, useParams } from "react-router";
+import type { FormSummary, FormQuestion } from "../../api/forms";
+import {
+  createQuestion,
+  getForm,
+  getQuestions,
+  updateQuestion,
+} from "../../api/forms";
+
+export default function FormEditorPage() {
+  const { id } = useParams<{ id: string }>();
+
+  const [form, setForm] = useState<FormSummary | null>(null);
+  const [questions, setQuestions] = useState<FormQuestion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [questionLabel, setQuestionLabel] = useState("");
+  const [questionType, setQuestionType] = useState(0);
+  const [questionRequired, setQuestionRequired] = useState(false);
+  const [questionOptions, setQuestionOptions] = useState("");
+  const [savingQuestion, setSavingQuestion] = useState(false);
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(
+    null,
+  );
+
+  async function handleCreateQuestion(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!id) {
+      setError("Form ID is missing.");
+      return;
+    }
+
+    const label = questionLabel.trim();
+    if (!label) {
+      setError("Please enter a question.");
+      return;
+    }
+
+    const needsOptions = [2, 3, 4].includes(questionType);
+    const options = needsOptions
+      ? questionOptions.split("\n").map((option) => option.trim())
+      : [];
+
+    if (
+      needsOptions &&
+      (options.length < 2 || options.some((option) => !option))
+    ) {
+      setError("Enter at least two non-empty options, one per line.");
+      return;
+    }
+
+    setSavingQuestion(true);
+    setError("");
+
+    try {
+      const data = {
+        label,
+        type: questionType,
+        isRequired: questionRequired,
+        options,
+      };
+
+      if (editingQuestionId) {
+        const updatedQuestion = await updateQuestion(
+          id,
+          editingQuestionId,
+          data,
+        );
+
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === updatedQuestion.id ? updatedQuestion : question,
+          ),
+        );
+
+        setEditingQuestionId(null);
+      } else {
+        const createdQuestion = await createQuestion(id, data);
+        setQuestions((current) => [...current, createdQuestion]);
+      }
+
+      setQuestionLabel("");
+      setQuestionType(0);
+      setQuestionRequired(false);
+      setQuestionOptions("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save question.");
+    } finally {
+      setSavingQuestion(false);
+    }
+  }
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    const formId = id;
+    let cancelled = false;
+
+    async function loadEditor() {
+      try {
+        const [formData, questionData] = await Promise.all([
+          getForm(formId),
+          getQuestions(formId),
+        ]);
+
+        if (!cancelled) {
+          setForm(formData);
+          setQuestions(questionData);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load the form.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadEditor();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  if (!id) {
+    return (
+      <main>
+        <p role="alert">Form ID is missing.</p>
+        <Link to="/">Back to dashboard</Link>
+      </main>
+    );
+  }
+
+  if (loading) {
+    return (
+      <main>
+        <p>Loading form editor...</p>
+      </main>
+    );
+  }
+
+  if (error || !form) {
+    return (
+      <main>
+        <p role="alert">{error || "Form not found."}</p>
+        <Link to="/">Back to dashboard</Link>
+      </main>
+    );
+  }
+
+  const questionTypes = [
+    "Short text",
+    "Long text",
+    "Single choice",
+    "Multiple choice",
+    "Dropdown",
+    "Number",
+    "Date",
+    "Yes / No",
+  ];
+
+  return (
+    <main>
+      <p>
+        <Link to="/">← Back to dashboard</Link>
+      </p>
+
+      <h1>{form.title}</h1>
+      <h2>Questions</h2>
+      <form onSubmit={handleCreateQuestion}>
+        <h3>{editingQuestionId ? "Edit question" : "Add a question"}</h3>
+
+        <label htmlFor="questionLabel">Question text</label>
+        <input
+          id="questionLabel"
+          value={questionLabel}
+          onChange={(event) => setQuestionLabel(event.target.value)}
+          maxLength={1000}
+          required
+          placeholder="e.g. What is your name?"
+        />
+
+        <label htmlFor="questionType">Question type</label>
+        <select
+          id="questionType"
+          value={questionType}
+          onChange={(event) => setQuestionType(Number(event.target.value))}
+        >
+          <option value={0}>Short text</option>
+          <option value={1}>Long text</option>
+          <option value={2}>Single choice</option>
+          <option value={3}>Multiple choice</option>
+          <option value={4}>Dropdown</option>
+          <option value={5}>Number</option>
+          <option value={6}>Date</option>
+          <option value={7}>Yes / No</option>
+        </select>
+
+        {[2, 3, 4].includes(questionType) && (
+          <>
+            <label htmlFor="questionOptions">
+              Options (one per line; at least two)
+            </label>
+            <textarea
+              id="questionOptions"
+              value={questionOptions}
+              onChange={(event) => setQuestionOptions(event.target.value)}
+              required
+              rows={4}
+              placeholder={"Option 1\nOption 2"}
+            />
+          </>
+        )}
+
+        <label>
+          <input
+            type="checkbox"
+            checked={questionRequired}
+            onChange={(event) => setQuestionRequired(event.target.checked)}
+          />
+          Required question
+        </label>
+
+        <button type="submit" disabled={savingQuestion}>
+          {savingQuestion
+            ? "Saving..."
+            : editingQuestionId
+              ? "Save changes"
+              : "Add question"}
+        </button>
+
+        {editingQuestionId && (
+          <button
+            type="button"
+            onClick={() => {
+              setEditingQuestionId(null);
+              setQuestionLabel("");
+              setQuestionType(0);
+              setQuestionRequired(false);
+              setQuestionOptions("");
+              setError("");
+            }}
+          >
+            Cancel editing
+          </button>
+        )}
+      </form>
+
+      {error && <p role="alert">{error}</p>}
+      {questions.length === 0 ? (
+        <p>No questions yet. We'll add question creation next.</p>
+      ) : (
+        <ol>
+          {questions.map((question) => (
+            <li key={question.id}>
+              <strong>{question.label}</strong>
+              {" — "}
+              {questionTypes[question.type] ?? "Unknown type"}
+
+              {question.isRequired && " (Required)"}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingQuestionId(question.id);
+                  setQuestionLabel(question.label);
+                  setQuestionType(question.type);
+                  setQuestionRequired(question.isRequired);
+                  setQuestionOptions(
+                    question.options.map((option) => option.label).join("\n"),
+                  );
+                  setError("");
+                }}
+              >
+                Edit
+              </button>
+
+              {question.options.length > 0 && (
+                <ul>
+                  {question.options.map((option) => (
+                    <li key={option.id}>{option.label}</li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </main>
+  );
+}
